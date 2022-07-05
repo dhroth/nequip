@@ -725,6 +725,7 @@ def neighbor_list_and_relative_vec(
     # ASE dependent part
     temp_cell = ase.geometry.complete_cell(temp_cell)
 
+    """
     first_idex, second_idex, shifts = ase.neighborlist.primitive_neighbor_list(
         "ijS",
         pbc,
@@ -734,6 +735,32 @@ def neighbor_list_and_relative_vec(
         self_interaction=strict_self_interaction,  # we want edges from atom to itself in different periodic images!
         use_scaled_positions=False,
     )
+    """
+
+    from ocpmodels.common.utils import radius_graph_pbc
+    class DotDict(dict):
+        """dot.notation access to dictionary attributes"""
+        def __getattr__(self, attr):
+            return self.get(attr)
+        __setattr__= dict.__setitem__
+        __delattr__= dict.__delitem__
+
+        def __getstate__(self):
+            return self
+
+        def __setstate__(self, state):
+            self.update(state)
+            self.__dict__ = self
+
+    data = {"pos": torch.tensor(temp_pos).cuda(),
+            "natoms": torch.tensor([pos.shape[0]]).cuda(),
+            "cell": torch.tensor(temp_cell, dtype=torch.float32).unsqueeze(0).cuda()}
+    edge_index, cell_offsets, neighbors = radius_graph_pbc(DotDict(data),
+                                                           float(r_max),
+                                                           pos.shape[0])
+    shifts = (-1 * cell_offsets).cpu().numpy()
+    first_idex = edge_index.cpu().numpy()[0,:]
+    second_idex = edge_index.cpu().numpy()[1,:]
 
     # Eliminate true self-edges that don't cross periodic boundaries
     if not self_interaction:
@@ -747,6 +774,17 @@ def neighbor_list_and_relative_vec(
         first_idex = first_idex[keep_edge]
         second_idex = second_idex[keep_edge]
         shifts = shifts[keep_edge]
+
+    """
+    ase_order = np.argsort(first_idex * 125000 + second_idex * 125 + shifts[:,0] * 25 + shifts[:,1] * 5 + shifts[:,2])
+    ocp_order = np.argsort(ocp_first_idex * 125000 + ocp_second_idex * 125 + cell_offsets[:,0] * 25 + cell_offsets[:,1] * 5 + cell_offsets[:,2])
+    try:
+        assert (ocp_first_idex[ocp_order] == first_idex[ase_order]).all()
+        assert (ocp_second_idex[ocp_order] == second_idex[ase_order]).all()
+        assert (cell_offsets[ocp_order] == shifts[ase_order]).all()
+    except AssertionError as e:
+        breakpoint()
+    """
 
     # Build output:
     edge_index = torch.vstack(
